@@ -94,7 +94,7 @@ static struct ibv_context_ops mlx4_ctx_ops = {
 	.reg_mr	       = mlx4_reg_mr,
 	.dereg_mr      = mlx4_dereg_mr,
 	.create_cq     = mlx4_create_cq,
-	.poll_cq       = mlx4_poll_cq,
+	.poll_cq       = mlx4_poll_ibv_cq,
 	.req_notify_cq = mlx4_arm_cq,
 	.cq_event      = mlx4_cq_event,
 	.resize_cq     = mlx4_resize_cq,
@@ -206,6 +206,7 @@ static int mlx4_init_context(struct verbs_device *v_device,
 	verbs_set_ctx_op(verbs_ctx, drv_ibv_create_flow, ibv_cmd_create_flow);
 	verbs_set_ctx_op(verbs_ctx, drv_ibv_destroy_flow, ibv_cmd_destroy_flow);
 	verbs_set_ctx_op(verbs_ctx, query_device_ex, mlx4_query_device_ex);
+	verbs_set_ctx_op(verbs_ctx, poll_cq_ex, mlx4_poll_cq_ex);
 
 	return 0;
 
