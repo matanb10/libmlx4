@@ -215,6 +215,7 @@ struct mlx4_cq {
 	uint32_t		       *arm_db;
 	int				arm_sn;
 	int				cqe_size;
+	int				creation_flags;
 };
 
 struct mlx4_srq {
@@ -286,14 +287,28 @@ struct mlx4_cqe {
 	uint32_t	vlan_my_qpn;
 	uint32_t	immed_rss_invalid;
 	uint32_t	g_mlpath_rqpn;
-	uint8_t		sl_vid;
-	uint8_t		reserved1;
-	uint16_t	rlid;
-	uint32_t	reserved2;
+	union {
+		struct {
+			union {
+				struct {
+					uint16_t  sl_vid;
+					uint16_t  rlid;
+				};
+				uint32_t  timestamp_16_47;
+			};
+			uint32_t  reserved1;
+		};
+		struct {
+			uint16_t reserved2;
+			uint8_t  smac[6];
+		};
+	};
 	uint32_t	byte_cnt;
 	uint16_t	wqe_index;
 	uint16_t	checksum;
-	uint8_t		reserved3[3];
+	uint8_t		reserved3;
+	uint8_t		timestamp_8_15;
+	uint8_t		timestamp_0_7;
 	uint8_t		owner_sr_opcode;
 };
 
@@ -377,7 +392,9 @@ int mlx4_alloc_cq_buf(struct mlx4_device *dev, struct mlx4_buf *buf, int nent,
 		      int entry_size);
 int mlx4_resize_cq(struct ibv_cq *cq, int cqe);
 int mlx4_destroy_cq(struct ibv_cq *cq);
-int mlx4_poll_cq(struct ibv_cq *cq, int ne, struct ibv_wc *wc);
+int mlx4_poll_ibv_cq(struct ibv_cq *cq, int ne, struct ibv_wc *wc);
+int mlx4_poll_cq_ex(struct ibv_cq *ibcq, int num_entries,
+		    struct ibv_wc_ex *wc, int wc_size);
 int mlx4_arm_cq(struct ibv_cq *cq, int solicited);
 void mlx4_cq_event(struct ibv_cq *cq);
 void __mlx4_cq_clean(struct mlx4_cq *cq, uint32_t qpn, struct mlx4_srq *srq);

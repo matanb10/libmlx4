@@ -181,7 +181,8 @@ static void mlx4_handle_error_cqe(struct mlx4_err_cqe *cqe, struct ibv_wc *wc)
 
 static int mlx4_poll_one(struct mlx4_cq *cq,
 			 struct mlx4_qp **cur_qp,
-			 struct ibv_wc *wc)
+			 struct ibv_wc_ex *wc,
+			 int wc_size)
 {
 	struct mlx4_wq *wq;
 	struct mlx4_cqe *cqe;
@@ -191,6 +192,8 @@ static int mlx4_poll_one(struct mlx4_cq *cq,
 	uint16_t wqe_index;
 	int is_error;
 	int is_send;
+	int timestamp_en = !!(cq->creation_flags &
+			      IBV_CREATE_CQ_ATTR_TIMESTAMP);
 
 	cqe = next_cqe_sw(cq);
 	if (!cqe)
@@ -257,7 +260,8 @@ static int mlx4_poll_one(struct mlx4_cq *cq,
 	}
 
 	if (is_error) {
-		mlx4_handle_error_cqe((struct mlx4_err_cqe *) cqe, wc);
+		mlx4_handle_error_cqe((struct mlx4_err_cqe *)cqe,
+				      (struct ibv_wc *)wc);
 		return CQ_OK;
 	}
 
@@ -316,7 +320,6 @@ static int mlx4_poll_one(struct mlx4_cq *cq,
 			break;
 		}
 
-		wc->slid	   = ntohs(cqe->rlid);
 		g_mlpath_rqpn	   = ntohl(cqe->g_mlpath_rqpn);
 		wc->src_qp	   = g_mlpath_rqpn & 0xffffff;
 		wc->dlid_path_bits = (g_mlpath_rqpn >> 24) & 0x7f;
@@ -325,16 +328,36 @@ static int mlx4_poll_one(struct mlx4_cq *cq,
 		/* When working with xrc srqs, don't have qp to check link layer.
 		  * Using IB SL, should consider Roce. (TBD)
 		*/
-		if ((*cur_qp) && (*cur_qp)->link_layer == IBV_LINK_LAYER_ETHERNET)
-			wc->sl	   = ntohs(cqe->sl_vid) >> 13;
-		else
-			wc->sl	   = ntohs(cqe->sl_vid) >> 12;
+		/* sl is invalid when timestamp is used */
+		if (!timestamp_en) {
+			wc->slid = ntohs(cqe->rlid);
+			if ((*cur_qp)->link_layer == IBV_LINK_LAYER_ETHERNET)
+				wc->sl = ntohs(cqe->sl_vid) >> 13;
+			else
+				wc->sl = ntohs(cqe->sl_vid) >> 12;
+		} else {
+			wc->slid = -1;
+			wc->sl = -1;
+		}
+	}
+
+	if (timestamp_en &&
+	    offsetof(struct ibv_wc_ex, timestamp) + sizeof(wc->timestamp) <= wc_size)  {
+		uint16_t timestamp_0_15 = cqe->timestamp_0_7 |
+			cqe->timestamp_8_15 << 8;
+
+		wc->timestamp =
+			(((uint64_t)ntohl(cqe->timestamp_16_47)
+			 + !timestamp_0_15) << 16) |
+			(uint64_t)timestamp_0_15;
+		wc->wc_flags |= IBV_WC_WITH_TIMESTAMP;
 	}
 
 	return CQ_OK;
 }
 
-int mlx4_poll_cq(struct ibv_cq *ibcq, int ne, struct ibv_wc *wc)
+static inline int mlx4_poll_cq(struct ibv_cq *ibcq, int ne,
+			       struct ibv_wc_ex *wc, int wc_size)
 {
 	struct mlx4_cq *cq = to_mcq(ibcq);
 	struct mlx4_qp *qp = NULL;
@@ -344,7 +367,8 @@ int mlx4_poll_cq(struct ibv_cq *ibcq, int ne, struct ibv_wc *wc)
 	pthread_spin_lock(&cq->lock);
 
 	for (npolled = 0; npolled < ne; ++npolled) {
-		err = mlx4_poll_one(cq, &qp, wc + npolled);
+		err = mlx4_poll_one(cq, &qp, ((void *)wc) + npolled * wc_size,
+				    wc_size);
 		if (err != CQ_OK)
 			break;
 	}
@@ -355,6 +379,17 @@ int mlx4_poll_cq(struct ibv_cq *ibcq, int ne, struct ibv_wc *wc)
 	pthread_spin_unlock(&cq->lock);
 
 	return err == CQ_POLL_ERR ? err : npolled;
+}
+
+int mlx4_poll_cq_ex(struct ibv_cq *ibcq, int num_entries,
+		    struct ibv_wc_ex *wc, int wc_size)
+{
+	return mlx4_poll_cq(ibcq, num_entries, wc, wc_size);
+}
+
+int mlx4_poll_ibv_cq(struct ibv_cq *ibcq, int ne, struct ibv_wc *wc)
+{
+	return mlx4_poll_cq(ibcq, ne, (struct ibv_wc_ex *)wc, sizeof(*wc));
 }
 
 int mlx4_arm_cq(struct ibv_cq *ibvcq, int solicited)
