@@ -393,6 +393,8 @@ int mlx4_dereg_mr(struct ibv_mr *mr);
 struct ibv_cq *mlx4_create_cq(struct ibv_context *context, int cqe,
 			       struct ibv_comp_channel *channel,
 			       int comp_vector);
+struct ibv_cq *mlx4_create_cq_ex(struct ibv_context *context,
+				 struct ibv_create_cq_attr_ex *cq_attr);
 int mlx4_alloc_cq_buf(struct mlx4_device *dev, struct mlx4_buf *buf, int nent,
 		      int entry_size);
 int mlx4_resize_cq(struct ibv_cq *cq, int cqe);
