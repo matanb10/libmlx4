@@ -246,18 +246,27 @@ int align_queue_size(int req)
 	return nent;
 }
 
-struct ibv_cq *mlx4_create_cq(struct ibv_context *context, int cqe,
-			       struct ibv_comp_channel *channel,
-			       int comp_vector)
+enum cmd_type {
+	MLX4_CMD_TYPE_BASIC,
+	MLX4_CMD_TYPE_EXTENDED
+};
+
+static struct ibv_cq *create_cq(struct ibv_context *context,
+				struct ibv_create_cq_attr_ex *cq_attr,
+				enum cmd_type cmd_type)
 {
-	struct mlx4_create_cq      cmd;
-	struct mlx4_create_cq_resp resp;
-	struct mlx4_cq		  *cq;
-	int			   ret;
-	struct mlx4_context       *mctx = to_mctx(context);
+	struct mlx4_create_cq		cmd;
+	struct mlx4_create_cq_ex	cmd_e;
+	struct mlx4_create_cq_resp	resp;
+	struct mlx4_create_cq_resp_ex	resp_e;
+	struct mlx4_cq			*cq;
+	int				ret;
+	struct mlx4_context		*mctx = to_mctx(context);
+	struct ibv_create_cq_attr_ex	cq_attr_e;
+	int cqe;
 
 	/* Sanity check CQ size before proceeding */
-	if (cqe > 0x3fffff)
+	if (cq_attr->cqe > 0x3fffff)
 		return NULL;
 
 	cq = malloc(sizeof *cq);
@@ -269,9 +278,11 @@ struct ibv_cq *mlx4_create_cq(struct ibv_context *context, int cqe,
 	if (pthread_spin_init(&cq->lock, PTHREAD_PROCESS_PRIVATE))
 		goto err;
 
-	cqe = align_queue_size(cqe + 1);
+	cq_attr_e = *cq_attr;
+	cqe = align_queue_size(cq_attr->cqe + 1);
 
-	if (mlx4_alloc_cq_buf(to_mdev(context->device), &cq->buf, cqe, mctx->cqe_size))
+	if (mlx4_alloc_cq_buf(to_mdev(context->device), &cq->buf, cqe,
+			      mctx->cqe_size))
 		goto err;
 
 	cq->cqe_size = mctx->cqe_size;
@@ -284,15 +295,31 @@ struct ibv_cq *mlx4_create_cq(struct ibv_context *context, int cqe,
 	cq->arm_sn     = 1;
 	*cq->set_ci_db = 0;
 
-	cmd.buf_addr = (uintptr_t) cq->buf.buf;
-	cmd.db_addr  = (uintptr_t) cq->set_ci_db;
+	if (cmd_type == MLX4_CMD_TYPE_BASIC) {
+		cmd.buf_addr = (uintptr_t)cq->buf.buf;
+		cmd.db_addr  = (uintptr_t)cq->set_ci_db;
 
-	ret = ibv_cmd_create_cq(context, cqe - 1, channel, comp_vector,
-				&cq->ibv_cq, &cmd.ibv_cmd, sizeof cmd,
-				&resp.ibv_resp, sizeof resp);
+		ret = ibv_cmd_create_cq(context, cqe - 1,
+					cq_attr_e.channel, cq_attr_e.comp_vector,
+					&cq->ibv_cq, &cmd.ibv_cmd, sizeof(cmd),
+					&resp.ibv_resp, sizeof(resp));
+	} else {
+		cmd_e.buf_addr = (uintptr_t)cq->buf.buf;
+		cmd_e.db_addr  = (uintptr_t)cq->set_ci_db;
+
+		cq_attr_e.cqe = cqe - 1;
+		ret = ibv_cmd_create_cq_ex(context, &cq_attr_e, &cq->ibv_cq,
+					   &cmd_e.ibv_cmd,
+					   sizeof(cmd_e.ibv_cmd), sizeof(cmd_e),
+					   &resp_e.ibv_resp,
+					   sizeof(resp_e.ibv_resp),
+					   sizeof(resp_e));
+	}
+
 	if (ret)
 		goto err_db;
 
+	cq->creation_flags = cmd_e.ibv_cmd.flags;
 	cq->cqn = resp.cqn;
 
 	return &cq->ibv_cq;
@@ -307,6 +334,22 @@ err:
 	free(cq);
 
 	return NULL;
+}
+
+struct ibv_cq *mlx4_create_cq(struct ibv_context *context, int cqe,
+			      struct ibv_comp_channel *channel,
+			      int comp_vector)
+{
+	struct ibv_create_cq_attr_ex attr = {.cqe = cqe, .channel = channel,
+					     .comp_vector = comp_vector};
+
+	return create_cq(context, &attr, MLX4_CMD_TYPE_BASIC);
+}
+
+struct ibv_cq *mlx4_create_cq_ex(struct ibv_context *context,
+				 struct ibv_create_cq_attr_ex *cq_attr)
+{
+	return create_cq(context, cq_attr, MLX4_CMD_TYPE_EXTENDED);
 }
 
 int mlx4_resize_cq(struct ibv_cq *ibcq, int cqe)
