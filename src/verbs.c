@@ -113,6 +113,52 @@ int mlx4_query_device_ex(struct ibv_context *context,
 	return resp.comp_mask;
 }
 
+#define READL(ptr) (*((uint32_t *)(ptr)))
+
+static int mlx4_read_clock(struct ibv_context *context, uint64_t *cycles)
+{
+	unsigned int clockhi, clocklo, clockhi1;
+	int i;
+	struct mlx4_context *ctx = to_mctx(context);
+
+	if (!ctx->hca_core_clock)
+		return -EOPNOTSUPP;
+
+	for (i = 0; i < 10; i++) {
+		clockhi = ntohl(READL(ctx->hca_core_clock));
+		clocklo = ntohl(READL(ctx->hca_core_clock + 4));
+		clockhi1 = ntohl(READL(ctx->hca_core_clock));
+		if (clockhi == clockhi1)
+			break;
+	}
+
+	/* workaround a hw bug */
+	if (clocklo == 0)
+		clocklo++;
+
+	*cycles = (uint64_t)clockhi << 32 | (uint64_t)clocklo;
+
+	return 0;
+}
+
+int mlx4_query_values(struct ibv_context *context, uint32_t q_values,
+		      struct ibv_values_ex *values)
+{
+	uint64_t cycles;
+	int err;
+
+	values->comp_mask = 0;
+
+	if (q_values & IBV_VALUES_MASK_HW_CLOCK) {
+		err = mlx4_read_clock(context, &cycles);
+		if (!err) {
+			values->hw_clock = cycles;
+			values->comp_mask |= IBV_VALUES_MASK_HW_CLOCK;
+		}
+	}
+	return 0;
+}
+
 int mlx4_query_port(struct ibv_context *context, uint8_t port,
 		     struct ibv_port_attr *attr)
 {

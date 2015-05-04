@@ -127,6 +127,8 @@ static int mlx4_init_context(struct verbs_device *v_device,
 	__u16				bf_reg_size;
 	struct mlx4_device              *dev = to_mdev(&v_device->device);
 	struct verbs_context *verbs_ctx = verbs_get_ctx(ibv_ctx);
+	struct ibv_device_attr_ex	dev_attrs;
+	int				err;
 
 	/* memory footprint of mlx4_context and verbs_context share
 	* struct ibv_context.
@@ -192,6 +194,33 @@ static int mlx4_init_context(struct verbs_device *v_device,
 		context->bf_buf_size = 0;
 	}
 
+	err = mlx4_query_device_ex(ibv_ctx, &dev_attrs);
+
+	if (err >= 0 && err & QUERY_DEVICE_RESP_MASK_TIMESTAMP) {
+		void *hca_clock_page;
+
+		context->core_clock.mult = ((1ull * 1000) << 29) /
+						dev_attrs.hca_core_clock;
+		context->core_clock.shift = 29;
+		context->core_clock.mask = dev_attrs.timestamp_mask;
+
+		hca_clock_page = mmap(NULL, dev->page_size,
+				      PROT_READ, MAP_SHARED, cmd_fd,
+				      dev->page_size * 3);
+
+		if (hca_clock_page == MAP_FAILED) {
+			fprintf(stderr, PFX
+				"Warning: Timestamp available,\n"
+				"but failed to mmap() hca core clock page.\n");
+		} else {
+			context->hca_core_clock = hca_clock_page +
+				context->core_clock.offset % dev->page_size;
+		}
+	} else {
+		memset(&context->core_clock, 0, sizeof(context->core_clock));
+		context->hca_core_clock = NULL;
+	};
+
 	pthread_spin_init(&context->uar_lock, PTHREAD_PROCESS_PRIVATE);
 	ibv_ctx->ops = mlx4_ctx_ops;
 
@@ -206,6 +235,7 @@ static int mlx4_init_context(struct verbs_device *v_device,
 	verbs_set_ctx_op(verbs_ctx, query_device_ex, mlx4_query_device_ex);
 	verbs_set_ctx_op(verbs_ctx, poll_cq_ex, mlx4_poll_cq_ex);
 	verbs_set_ctx_op(verbs_ctx, create_cq_ex, mlx4_create_cq_ex);
+	verbs_set_ctx_op(verbs_ctx, query_values, mlx4_query_values);
 
 	return 0;
 
@@ -219,6 +249,9 @@ static void mlx4_uninit_context(struct verbs_device *v_device,
 	munmap(context->uar, to_mdev(&v_device->device)->page_size);
 	if (context->bf_page)
 		munmap(context->bf_page, to_mdev(&v_device->device)->page_size);
+	if (context->hca_core_clock)
+		munmap(context->hca_core_clock - context->core_clock.offset,
+		       to_mdev(&v_device->device)->page_size);
 
 }
 
