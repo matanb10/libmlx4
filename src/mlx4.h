@@ -189,6 +189,7 @@ struct mlx4_context {
 	pthread_mutex_t			db_list_mutex;
 	int				cqe_size;
 	struct mlx4_xsrq_table		xsrq_table;
+	uint64_t			core_clock_offset;
 };
 
 struct mlx4_buf {
@@ -352,6 +353,13 @@ void mlx4_free_db(struct mlx4_context *context, enum mlx4_db_type type, uint32_t
 
 int mlx4_query_device(struct ibv_context *context,
 		       struct ibv_device_attr *attr);
+int _mlx4_query_device_ex(struct ibv_context *context,
+			  const struct ibv_query_device_ex_input *input,
+			  struct ibv_device_attr_ex *attr, size_t attr_size,
+			  uint32_t *comp_mask);
+int mlx4_query_device_ex(struct ibv_context *context,
+			 const struct ibv_query_device_ex_input *input,
+			 struct ibv_device_attr_ex *attr, size_t attr_size);
 int mlx4_query_port(struct ibv_context *context, uint8_t port,
 		     struct ibv_port_attr *attr);
 
