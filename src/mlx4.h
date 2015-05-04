@@ -191,7 +191,11 @@ struct mlx4_context {
 	struct mlx4_xsrq_table		xsrq_table;
 	struct {
 		uint64_t		offset;
+		int			mult;
+		int			shift;
+		uint64_t		mask;
 	} core_clock;
+	void			       *hca_core_clock;
 };
 
 struct mlx4_buf {
@@ -377,6 +381,8 @@ int _mlx4_query_device_ex(struct ibv_context *context,
 			  struct ibv_device_attr_ex *attr);
 int mlx4_query_device_ex(struct ibv_context *context,
 			 struct ibv_device_attr_ex *attr);
+int mlx4_query_values(struct ibv_context *context,
+		      struct ibv_values_ex *values);
 int mlx4_query_port(struct ibv_context *context, uint8_t port,
 		     struct ibv_port_attr *attr);
 
