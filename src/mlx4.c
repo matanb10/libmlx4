@@ -238,6 +238,7 @@ static int mlx4_init_context(struct verbs_device *v_device,
 	verbs_set_ctx_op(verbs_ctx, poll_cq_ex, mlx4_poll_cq_ex);
 	verbs_set_ctx_op(verbs_ctx, create_cq_ex, mlx4_create_cq_ex);
 	verbs_set_ctx_op(verbs_ctx, query_values, mlx4_query_values);
+	verbs_set_ctx_op(verbs_ctx, get_timestamp, mlx4_get_timestamp);
 
 	return 0;
 

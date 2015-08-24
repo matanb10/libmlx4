@@ -124,6 +124,22 @@ int mlx4_query_device_ex(struct ibv_context *context,
 	return 0;
 }
 
+int mlx4_get_timestamp(struct ibv_context *context,
+		       const struct ibv_wc_ex *wc,
+		       struct timespec *ts, int flags)
+{
+	if (flags != (IBV_TIMESTAMP_COMPLETION | IBV_TIMESTAMP_RAW))
+		return -ENOTSUP;
+
+	if (!(wc->wc_flags & IBV_WC_EX_WITH_TIMESTAMP))
+		return -EINVAL;
+
+	ts->tv_nsec = ibv_wc_ex_get64(wc, IBV_WC_EX_WITH_TIMESTAMP);
+	ts->tv_sec = 0;
+
+	return 0;
+}
+
 #define READL(ptr) (*((uint32_t *)(ptr)))
 static int mlx4_read_clock(struct ibv_context *context, uint64_t *cycles)
 {

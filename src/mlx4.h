@@ -381,6 +381,9 @@ int _mlx4_query_device_ex(struct ibv_context *context,
 			  struct ibv_device_attr_ex *attr);
 int mlx4_query_device_ex(struct ibv_context *context,
 			 struct ibv_device_attr_ex *attr);
+int mlx4_get_timestamp(struct ibv_context *context,
+		       const struct ibv_wc_ex *wc, struct timespec *ts,
+		       int flags);
 int mlx4_query_values(struct ibv_context *context,
 		      struct ibv_values_ex *values);
 int mlx4_query_port(struct ibv_context *context, uint8_t port,
