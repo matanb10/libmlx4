@@ -458,6 +458,16 @@ int mlx4_poll_one_ex(struct mlx4_cq *cq,
 	if (err != CQ_CONTINUE)
 		return err;
 
+	if (wc_flags & IBV_WC_EX_WITH_TIMESTAMP) {
+		uint16_t timestamp_0_15 = cqe->timestamp_0_7 |
+			cqe->timestamp_8_15 << 8;
+
+		wc_ex->wc_flags |= IBV_WC_EX_WITH_TIMESTAMP;
+		*wc_buffer.b64++ = (((uint64_t)ntohl(cqe->timestamp_16_47)
+					     + !timestamp_0_15) << 16) |
+					   (uint64_t)timestamp_0_15;
+	}
+
 	if (is_send) {
 		switch (cqe->owner_sr_opcode & MLX4_CQE_OPCODE_MASK) {
 		case MLX4_OPCODE_RDMA_WRITE_IMM:
