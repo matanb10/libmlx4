@@ -384,8 +384,6 @@ static struct ibv_cq *create_cq(struct ibv_context *context,
 		cmd_e.buf_addr = (uintptr_t)cq->buf.buf;
 		cmd_e.db_addr  = (uintptr_t)cq->set_ci_db;
 
-		cq->mlx4_poll_one = mlx4_poll_one_ex;
-
 		cq_attr_e.cqe = cqe - 1;
 		ret = ibv_cmd_create_cq_ex(context, &cq_attr_e, &cq->ibv_cq,
 					   &cmd_e.ibv_cmd,
@@ -400,6 +398,17 @@ static struct ibv_cq *create_cq(struct ibv_context *context,
 
 	cq->creation_flags = cmd_e.ibv_cmd.flags;
 	cq->wc_flags = cq_attr->wc_flags;
+	if (!(cq->creation_flags & IBV_CREATE_CQ_ATTR_COMPLETION_TIMESTAMP))
+		cq->wc_flags &= ~IBV_WC_EX_WITH_TIMESTAMP;
+
+	if (cq->wc_flags == WC_STANDARD_FLAGS)
+		cq->mlx4_poll_one = mlx4_poll_one_ex_std_flags;
+	else if (cq->wc_flags == ((WC_STANDARD_FLAGS | IBV_WC_EX_WITH_TIMESTAMP) &
+				  ~(IBV_WC_EX_WITH_SL | IBV_WC_EX_WITH_SLID)))
+		cq->mlx4_poll_one = mlx4_poll_one_ex_std_ts;
+	else
+		cq->mlx4_poll_one = mlx4_poll_one_ex;
+
 	cq->cqn = resp.cqn;
 
 	return &cq->ibv_cq;

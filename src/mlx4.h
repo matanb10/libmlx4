@@ -415,6 +415,12 @@ int mlx4_poll_cq_ex(struct ibv_cq *ibcq,
 int mlx4_poll_one_ex(struct mlx4_cq *cq,
 		     struct mlx4_qp **cur_qp,
 		     struct ibv_wc_ex **pwc_ex);
+int mlx4_poll_one_ex_std_flags(struct mlx4_cq *cq,
+			       struct mlx4_qp **cur_qp,
+			       struct ibv_wc_ex **pwc_ex);
+int mlx4_poll_one_ex_std_ts(struct mlx4_cq *cq,
+			    struct mlx4_qp **cur_qp,
+			    struct ibv_wc_ex **pwc_ex);
 int mlx4_arm_cq(struct ibv_cq *cq, int solicited);
 void mlx4_cq_event(struct ibv_cq *cq);
 void __mlx4_cq_clean(struct mlx4_cq *cq, uint32_t qpn, struct mlx4_srq *srq);

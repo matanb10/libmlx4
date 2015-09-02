@@ -438,6 +438,188 @@ union wc_buffer {
 	uint64_t	*b64;
 };
 
+static inline void mlx4_poll_one_ex_std_send(struct mlx4_cqe *cqe,
+					     struct ibv_wc_ex *wc_ex,
+					     union wc_buffer *pwc_buffer,
+					     uint32_t qpn)
+{
+	union wc_buffer wc_buffer = *pwc_buffer;
+
+	switch (cqe->owner_sr_opcode & MLX4_CQE_OPCODE_MASK) {
+	case MLX4_OPCODE_RDMA_WRITE_IMM:
+		wc_ex->wc_flags |= IBV_WC_EX_IMM;
+	case MLX4_OPCODE_RDMA_WRITE:
+		wc_ex->opcode    = IBV_WC_RDMA_WRITE;
+		break;
+	case MLX4_OPCODE_SEND_IMM:
+		wc_ex->wc_flags |= IBV_WC_EX_IMM;
+	case MLX4_OPCODE_SEND:
+		wc_ex->opcode    = IBV_WC_SEND;
+		break;
+	case MLX4_OPCODE_RDMA_READ:
+		wc_ex->opcode    = IBV_WC_RDMA_READ;
+		*wc_buffer.b32++  = ntohl(cqe->byte_cnt);
+		wc_ex->wc_flags |= IBV_WC_EX_WITH_BYTE_LEN;
+		break;
+	case MLX4_OPCODE_ATOMIC_CS:
+		wc_ex->opcode    = IBV_WC_COMP_SWAP;
+		*wc_buffer.b32++  = 8;
+		wc_ex->wc_flags |= IBV_WC_EX_WITH_BYTE_LEN;
+		break;
+	case MLX4_OPCODE_ATOMIC_FA:
+		wc_ex->opcode    = IBV_WC_FETCH_ADD;
+		*wc_buffer.b32++  = 8;
+		wc_ex->wc_flags |= IBV_WC_EX_WITH_BYTE_LEN;
+		break;
+	case MLX4_OPCODE_BIND_MW:
+		wc_ex->opcode    = IBV_WC_BIND_MW;
+		break;
+	default:
+		/* assume it's a send completion */
+		wc_ex->opcode    = IBV_WC_SEND;
+		break;
+	}
+
+	*wc_buffer.b32++  = qpn;
+	wc_ex->wc_flags |= IBV_WC_EX_WITH_QP_NUM;
+
+	*pwc_buffer = wc_buffer;
+}
+
+int mlx4_poll_one_ex_std_flags(struct mlx4_cq *cq,
+			       struct mlx4_qp **cur_qp,
+			       struct ibv_wc_ex **pwc_ex)
+{
+	struct mlx4_cqe *cqe;
+	uint32_t qpn;
+	uint32_t g_mlpath_rqpn;
+	int is_send;
+	struct ibv_wc_ex *wc_ex = *pwc_ex;
+	union wc_buffer wc_buffer;
+	int err;
+
+	wc_buffer.b64 = (uint64_t *)&wc_ex->buffer;
+	wc_ex->wc_flags = 0;
+	wc_ex->reserved = 0;
+	err = mlx4_handle_cq(cq, cur_qp, wc_ex, &cqe, &qpn, &is_send);
+	if (err != CQ_CONTINUE)
+		return err;
+
+	if (is_send) {
+		mlx4_poll_one_ex_std_send(cqe, wc_ex, &wc_buffer, qpn);
+	} else {
+		wc_ex->wc_flags = IBV_WC_EX_WITH_QP_NUM | IBV_WC_EX_WITH_SRC_QP |
+			IBV_WC_EX_WITH_PKEY_INDEX | IBV_WC_EX_WITH_SLID |
+			IBV_WC_EX_WITH_SL | IBV_WC_EX_WITH_DLID_PATH_BITS |
+			IBV_WC_EX_WITH_BYTE_LEN;
+		*wc_buffer.b32++ = ntohl(cqe->byte_cnt);
+
+		switch (cqe->owner_sr_opcode & MLX4_CQE_OPCODE_MASK) {
+		case MLX4_RECV_OPCODE_RDMA_WRITE_IMM:
+			wc_ex->opcode   = IBV_WC_RECV_RDMA_WITH_IMM;
+			wc_ex->wc_flags |= IBV_WC_EX_IMM | IBV_WC_EX_WITH_IMM;
+			*wc_buffer.b32++ = cqe->immed_rss_invalid;
+			break;
+		case MLX4_RECV_OPCODE_SEND:
+			wc_ex->opcode   = IBV_WC_RECV;
+			break;
+		case MLX4_RECV_OPCODE_SEND_IMM:
+			wc_ex->opcode   = IBV_WC_RECV;
+			wc_ex->wc_flags |= IBV_WC_EX_IMM | IBV_WC_EX_WITH_IMM;
+			*wc_buffer.b32++ = cqe->immed_rss_invalid;
+			break;
+		}
+
+		*wc_buffer.b32++  = qpn;
+		g_mlpath_rqpn	   = ntohl(cqe->g_mlpath_rqpn);
+		*wc_buffer.b32++  = g_mlpath_rqpn & 0xffffff;
+		*wc_buffer.b16++  = ntohl(cqe->immed_rss_invalid) & 0x7f;
+		*wc_buffer.b16++  = ntohs(cqe->rlid);
+		if ((*cur_qp) && (*cur_qp)->link_layer == IBV_LINK_LAYER_ETHERNET)
+			*wc_buffer.b8++  = ntohs(cqe->sl_vid) >> 13;
+		else
+			*wc_buffer.b8++  = ntohs(cqe->sl_vid) >> 12;
+		*wc_buffer.b8++  = (g_mlpath_rqpn >> 24) & 0x7f;
+		wc_ex->wc_flags |= g_mlpath_rqpn & 0x80000000 ? IBV_WC_EX_GRH : 0;
+		/* When working with xrc srqs, don't have qp to check link layer.
+		  * Using IB SL, should consider Roce. (TBD)
+		*/
+	}
+	*pwc_ex = (struct ibv_wc_ex *)((uintptr_t)(wc_buffer.b8 + sizeof(uint64_t) - 1) &
+				       ~(sizeof(uint64_t)));
+
+	return CQ_OK;
+}
+
+
+int mlx4_poll_one_ex_std_ts(struct mlx4_cq *cq,
+			    struct mlx4_qp **cur_qp,
+			    struct ibv_wc_ex **pwc_ex)
+{
+	struct mlx4_cqe *cqe;
+	uint32_t qpn;
+	uint32_t g_mlpath_rqpn;
+	int is_send;
+	struct ibv_wc_ex *wc_ex = *pwc_ex;
+	union wc_buffer wc_buffer;
+	int err;
+	uint16_t timestamp_0_15;
+
+	wc_buffer.b64 = (uint64_t *)&wc_ex->buffer;
+	wc_ex->reserved = 0;
+	err = mlx4_handle_cq(cq, cur_qp, wc_ex, &cqe, &qpn, &is_send);
+	if (err != CQ_CONTINUE)
+		return err;
+
+	timestamp_0_15 = cqe->timestamp_0_7 |
+		cqe->timestamp_8_15 << 8;
+
+	wc_ex->wc_flags = IBV_WC_EX_WITH_TIMESTAMP;
+	*wc_buffer.b64++ = (((uint64_t)ntohl(cqe->timestamp_16_47)
+			     + !timestamp_0_15) << 16) |
+		(uint64_t)timestamp_0_15;
+
+	if (is_send) {
+		mlx4_poll_one_ex_std_send(cqe, wc_ex, &wc_buffer, qpn);
+	} else {
+		wc_ex->wc_flags |= IBV_WC_EX_WITH_QP_NUM | IBV_WC_EX_WITH_SRC_QP |
+				   IBV_WC_EX_WITH_PKEY_INDEX |
+				   IBV_WC_EX_WITH_DLID_PATH_BITS |
+				   IBV_WC_EX_WITH_BYTE_LEN;
+
+		*wc_buffer.b32++ = ntohl(cqe->byte_cnt);
+
+		switch (cqe->owner_sr_opcode & MLX4_CQE_OPCODE_MASK) {
+		case MLX4_RECV_OPCODE_RDMA_WRITE_IMM:
+			wc_ex->opcode   = IBV_WC_RECV_RDMA_WITH_IMM;
+			wc_ex->wc_flags |= IBV_WC_EX_IMM | IBV_WC_EX_WITH_IMM;
+			*wc_buffer.b32++ = cqe->immed_rss_invalid;
+			break;
+		case MLX4_RECV_OPCODE_SEND:
+			wc_ex->opcode   = IBV_WC_RECV;
+			break;
+		case MLX4_RECV_OPCODE_SEND_IMM:
+			wc_ex->opcode   = IBV_WC_RECV;
+			wc_ex->wc_flags |= IBV_WC_EX_IMM | IBV_WC_EX_WITH_IMM;
+			*wc_buffer.b32++ = cqe->immed_rss_invalid;
+			break;
+		}
+
+		*wc_buffer.b32++  = qpn;
+		g_mlpath_rqpn	   = ntohl(cqe->g_mlpath_rqpn);
+		*wc_buffer.b32++  = g_mlpath_rqpn & 0xffffff;
+		*wc_buffer.b16++  = ntohl(cqe->immed_rss_invalid) & 0x7f;
+		*wc_buffer.b8++  = (g_mlpath_rqpn >> 24) & 0x7f;
+		wc_ex->wc_flags |= g_mlpath_rqpn & 0x80000000 ? IBV_WC_EX_GRH : 0;
+		/* When working with xrc srqs, don't have qp to check link layer.
+		  * Using IB SL, should consider Roce. (TBD)
+		*/
+	}
+	*pwc_ex = (struct ibv_wc_ex *)((uintptr_t)(wc_buffer.b8 + sizeof(uint64_t) - 1) &
+				       ~(sizeof(uint64_t)));
+
+	return CQ_OK;
+}
 int mlx4_poll_one_ex(struct mlx4_cq *cq,
 		     struct mlx4_qp **cur_qp,
 		     struct ibv_wc_ex **pwc_ex)
